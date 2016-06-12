@@ -1,5 +1,31 @@
-In The Pipe
+2.2.0 (2016-02-29)
 ===========
+* Upgraded dependency versions
+* Hamcrest-matcher support in json-path-assert
+* Bug fixes and improvements
+
+2.1.0 (2015-11-22)
+===========
+* Upgraded dependency versions
+* Introduced Cache SPI
+* Introduced path functions
+* Introduced JsonOrgJsonProvider
+* OSGI improvements
+* Inline filters supports same operators as Filter builders
+* Improved filter evaluation
+* Internal makeovers
+* New write operations : map(...) and renameKey(...)
+
+2.0.0 (2015-03-19)
+=================
+* Upgraded dependency versions
+* Moved JsonProvider and MappingProvider implementations out of the interal package **OSGi**
+* Removed HTTP provider and methods
+* Add an unwrap(Object) method to JsonProvider, use it when extracting values for Criteria evaluation **breaks JsonProvider SPI**
+* Fixed issue #71 - esacpe character in inline predicates 
+  `JsonPath.read(json, "$.logs[?(@.message == 'it\\'s here')].message");`
+* New method `jsonString()` added to `ReadContext` and `WriteContext` to extract json model as a string  
+* Path does not have to be definite in filter API `filter(where("authors[*].lastName").contains("Waugh"))`
 
 1.2.0 (2014-11-11)
 ==================

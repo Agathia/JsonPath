@@ -73,7 +73,6 @@ public class ComplianceTest {
         assertThat(JsonPath.<List<Integer>>read(json, "$.points[?(@.id == 'i4')].x"), hasItem(-6));
         assertThat(JsonPath.<List<Integer>>read(json, "$.points[*].x"), hasItems(4, -2, 8, -6, 0, 1));
         assertThat(JsonPath.<List<String>>read(json, "$.points[?(@.z)].id"), hasItems("i2", "i5"));
-        assertThat(JsonPath.<String>read(json, "$.points[(@.length - 1)].id"), equalTo("i6"));
     }
 
     @Test
@@ -107,13 +106,12 @@ public class ComplianceTest {
                 "               }\n" +
                 "             }";
 
-        //assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(@)]"), Matchers.is(notNullValue()));
+        assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(@)]"), Matchers.is(notNullValue()));
+        assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(@.id == 'ViewSVG')].id"), hasItems("ViewSVG"));
         assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(@ && @.id == 'ViewSVG')].id"), hasItems("ViewSVG"));
 
-        //assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(@ && @.id && !@.label)].id"), hasItems("?")); //low
-        //assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(@ && @.label && /SVG/.test(@.label))].id"), hasItems("?")); //low
-        //assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(!@)]"), hasItems("?")); //low
-        //assertThat(JsonPath.<List<String>>read(json, "$..[0]"), hasItems("?")); //low
+        assertThat(JsonPath.<List<String>>read(json, "$.menu.items[?(@ && @.id && !@.label)].id"), hasItems("Open", "Quality", "Pause", "Mute", "Copy", "Help")); //low
+
 
     }
 

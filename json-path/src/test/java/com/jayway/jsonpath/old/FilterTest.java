@@ -3,10 +3,10 @@ package com.jayway.jsonpath.old;
 import com.jayway.jsonpath.BaseTest;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.Filter;
-import com.jayway.jsonpath.InvalidCriteriaException;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.Predicate;
 import com.jayway.jsonpath.spi.json.JsonProvider;
+import org.assertj.core.api.Assertions;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -199,8 +199,8 @@ public class FilterTest extends BaseTest {
         assertTrue(filter(where("foo").exists(true)).apply(createPredicateContext(check)));
         assertFalse(filter(where("foo").exists(false)).apply(createPredicateContext(check)));
 
-        assertTrue(filter(where("foo_null").exists(false)).apply(createPredicateContext(check)));
-        assertFalse(filter(where("foo_null").exists(true)).apply(createPredicateContext(check)));
+        assertTrue(filter(where("foo_null").exists(true)).apply(createPredicateContext(check)));
+        assertFalse(filter(where("foo_null").exists(false)).apply(createPredicateContext(check)));
 
         assertTrue(filter(where("bar").exists(false)).apply(createPredicateContext(check)));
         assertFalse(filter(where("bar").exists(true)).apply(createPredicateContext(check)));
@@ -214,19 +214,23 @@ public class FilterTest extends BaseTest {
         check.put("int", 1);
         check.put("long", 1L);
         check.put("double", 1.12D);
+        check.put("boolean", true);
 
         assertFalse(filter(where("string_null").type(String.class)).apply(createPredicateContext(check)));
         assertTrue(filter(where("string").type(String.class)).apply(createPredicateContext(check)));
         assertFalse(filter(where("string").type(Number.class)).apply(createPredicateContext(check)));
 
-        assertTrue(filter(where("int").type(Integer.class)).apply(createPredicateContext(check)));
-        assertFalse(filter(where("int").type(Long.class)).apply(createPredicateContext(check)));
+        assertTrue(filter(where("int").type(Number.class)).apply(createPredicateContext(check)));
+        assertFalse(filter(where("int").type(String.class)).apply(createPredicateContext(check)));
 
-        assertTrue(filter(where("long").type(Long.class)).apply(createPredicateContext(check)));
-        assertFalse(filter(where("long").type(Integer.class)).apply(createPredicateContext(check)));
+        assertTrue(filter(where("long").type(Number.class)).apply(createPredicateContext(check)));
+        assertFalse(filter(where("long").type(String.class)).apply(createPredicateContext(check)));
 
-        assertTrue(filter(where("double").type(Double.class)).apply(createPredicateContext(check)));
-        assertFalse(filter(where("double").type(Integer.class)).apply(createPredicateContext(check)));
+        assertTrue(filter(where("double").type(Number.class)).apply(createPredicateContext(check)));
+        assertFalse(filter(where("double").type(String.class)).apply(createPredicateContext(check)));
+
+        assertTrue(filter(where("boolean").type(Boolean.class)).apply(createPredicateContext(check)));
+        assertFalse(filter(where("boolean").type(String.class)).apply(createPredicateContext(check)));
     }
 
     @Test
@@ -412,10 +416,78 @@ public class FilterTest extends BaseTest {
         assertEquals(2, result2.size());
     }
 
-    @Test(expected = InvalidCriteriaException.class)
-    public void filter_path_must_be_absolute() {
+    @Test
+    public void contains_filter_evaluates_on_array() {
 
-        where("$.store.*").size(4);
+
+        String json = "{\n" +
+                "\"store\": {\n" +
+                "    \"book\": [\n" +
+                "        {\n" +
+                "            \"category\": \"reference\",\n" +
+                "            \"authors\" : [\n" +
+                "                 {\n" +
+                "                     \"firstName\" : \"Nigel\",\n" +
+                "                     \"lastName\" :  \"Rees\"\n" +
+                "                  }\n" +
+                "            ],\n" +
+                "            \"title\": \"Sayings of the Century\",\n" +
+                "            \"price\": 8.95\n" +
+                "        },\n" +
+                "        {\n" +
+                "            \"category\": \"fiction\",\n" +
+                "            \"authors\": [\n" +
+                "                 {\n" +
+                "                     \"firstName\" : \"Evelyn\",\n" +
+                "                     \"lastName\" :  \"Waugh\"\n" +
+                "                  },\n" +
+                "                 {\n" +
+                "                     \"firstName\" : \"Another\",\n" +
+                "                     \"lastName\" :  \"Author\"\n" +
+                "                  }\n" +
+                "            ],\n" +
+                "            \"title\": \"Sword of Honour\",\n" +
+                "            \"price\": 12.99\n" +
+                "        }\n" +
+                "    ]\n" +
+                "  }\n" +
+                "}";
+
+
+        Filter filter = filter(where("authors[*].lastName").contains("Waugh"));
+
+        List<String> result = JsonPath.parse(json).read("$.store.book[?].title", filter);
+
+        Assertions.assertThat(result).containsExactly("Sword of Honour");
     }
 
+
+    @Test
+    public void contains_filter_evaluates_on_string() {
+
+
+        String json = "{\n" +
+                "\"store\": {\n" +
+                "    \"book\": [\n" +
+                "        {\n" +
+                "            \"category\": \"reference\",\n" +
+                "            \"title\": \"Sayings of the Century\",\n" +
+                "            \"price\": 8.95\n" +
+                "        },\n" +
+                "        {\n" +
+                "            \"category\": \"fiction\",\n" +
+                "            \"title\": \"Sword of Honour\",\n" +
+                "            \"price\": 12.99\n" +
+                "        }\n" +
+                "    ]\n" +
+                "  }\n" +
+                "}";
+
+
+        Filter filter = filter(where("category").contains("fic"));
+
+        List<String> result = JsonPath.parse(json).read("$.store.book[?].title", filter);
+
+        Assertions.assertThat(result).containsExactly("Sword of Honour");
+    }
 }

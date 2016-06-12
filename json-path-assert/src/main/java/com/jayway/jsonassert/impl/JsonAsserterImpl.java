@@ -33,7 +33,9 @@ public class JsonAsserterImpl implements JsonAsserter {
         try {
             obj = JsonPath.<T>read(jsonObject, path);
         } catch (Exception e) {
-            throw new AssertionError(String.format("Error reading JSON path [%s]", path), e);
+            final AssertionError assertionError = new AssertionError(String.format("Error reading JSON path [%s]", path));
+            assertionError.initCause(e);
+            throw assertionError;
         }
 
         if (!matcher.matches(obj)) {
@@ -104,7 +106,7 @@ public class JsonAsserterImpl implements JsonAsserter {
 
     @Override
     public <T> JsonAsserter assertEquals(String path, T expected, String message) {
-        return null;  //To change body of implemented methods use File | Settings | File Templates.
+        return assertThat(path, equalTo(expected),message);
     }
 
     /**

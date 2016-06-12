@@ -14,12 +14,9 @@
  */
 package com.jayway.jsonpath;
 
-import com.jayway.jsonpath.internal.spi.json.JsonSmartJsonProvider;
-import com.jayway.jsonpath.internal.spi.mapper.JsonSmartMappingProvider;
+import com.jayway.jsonpath.internal.DefaultsImpl;
 import com.jayway.jsonpath.spi.json.JsonProvider;
 import com.jayway.jsonpath.spi.mapper.MappingProvider;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -36,28 +33,7 @@ import static java.util.Arrays.asList;
  */
 public class Configuration {
 
-    private static final Logger logger = LoggerFactory.getLogger(Configuration.class);
-
-    private static Defaults DEFAULTS = new Defaults() {
-
-        private final MappingProvider mappingProvider = new JsonSmartMappingProvider();
-
-        public JsonProvider jsonProvider() {
-            return new JsonSmartJsonProvider();
-        }
-
-        @Override
-        public Set<Option> options() {
-            return EnumSet.noneOf(Option.class);
-        }
-
-        @Override
-        public MappingProvider mappingProvider() {
-            return mappingProvider;
-        }
-    };
-
-
+    private static Defaults DEFAULTS = null;
 
     /**
      * Set Default configuration
@@ -65,6 +41,14 @@ public class Configuration {
      */
     public static synchronized void setDefaults(Defaults defaults){
         DEFAULTS = defaults;
+    }
+
+    private static Defaults getEffectiveDefaults(){
+        if (DEFAULTS == null) {
+          return DefaultsImpl.INSTANCE;
+        } else {
+          return DEFAULTS;
+        }
     }
 
     private final JsonProvider jsonProvider;
@@ -186,7 +170,8 @@ public class Configuration {
      * @return a new configuration based on defaults
      */
     public static Configuration defaultConfiguration() {
-        return Configuration.builder().jsonProvider(DEFAULTS.jsonProvider()).options(DEFAULTS.options()).build();
+        Defaults defaults = getEffectiveDefaults();
+        return Configuration.builder().jsonProvider(defaults.jsonProvider()).options(defaults.options()).build();
     }
 
     /**
@@ -240,11 +225,14 @@ public class Configuration {
         }
 
         public Configuration build() {
-            if (jsonProvider == null) {
-                jsonProvider = DEFAULTS.jsonProvider();
-            }
-            if(mappingProvider == null){
-                mappingProvider = DEFAULTS.mappingProvider();
+            if (jsonProvider == null || mappingProvider == null) {
+                final Defaults defaults = getEffectiveDefaults();
+                if (jsonProvider == null) {
+                    jsonProvider = defaults.jsonProvider();
+                }
+                if (mappingProvider == null){
+                    mappingProvider = defaults.mappingProvider();
+                }
             }
             return new Configuration(jsonProvider, mappingProvider, options, evaluationListener);
         }

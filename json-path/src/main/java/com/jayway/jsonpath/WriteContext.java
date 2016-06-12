@@ -31,11 +31,18 @@ public interface WriteContext {
     <T> T json();
 
     /**
+     * Returns the JSON model that this context is operating on as a JSON string
+     *
+     * @return json model as string
+     */
+    String jsonString();
+
+    /**
      * Set the value a the given path
      *
-     * @param path    path to set
-     * @param newValue new value
-     * @param filters filters
+     * @param path      path to set
+     * @param newValue  new value
+     * @param filters   filters
      * @return a document context
      */
     DocumentContext set(String path, Object newValue, Predicate... filters);
@@ -43,11 +50,30 @@ public interface WriteContext {
     /**
      * Set the value a the given path
      *
-     * @param path    path to set
-     * @param newValue new value
+     * @param path      path to set
+     * @param newValue  new value
      * @return a document context
      */
     DocumentContext set(JsonPath path, Object newValue);
+
+    /**
+     * Replaces the value on the given path with the result of the {@link MapFunction}.
+     *
+     * @param path           path to be converted set
+     * @param mapFunction    Converter object to be invoked
+     * @param filters        filters
+     * @return a document context
+     */
+    DocumentContext map(String path, MapFunction mapFunction, Predicate... filters);
+
+    /**
+     * Replaces the value on the given path with the result of the {@link MapFunction}.
+     *
+     * @param path           path to be converted set
+     * @param mapFunction    Converter object to be invoked (or lambda:))
+     * @return a document context
+     */
+    DocumentContext map(JsonPath path, MapFunction mapFunction);
 
     /**
      * Deletes the given path
@@ -119,4 +145,24 @@ public interface WriteContext {
      */
     DocumentContext put(JsonPath path, String key, Object value);
 
+    /**
+     * Renames the last key element of a given path.
+     * @param path          The path to the old key. Should be resolved to a map
+     *                      or an array including map items.
+     * @param oldKeyName    The old key name.
+     * @param newKeyName    The new key name.
+     * @param filters       filters.
+     * @return a document content.
+     */
+    DocumentContext renameKey(String path, String oldKeyName, String newKeyName, Predicate... filters);
+
+    /**
+     * Renames the last key element of a given path.
+     * @param path          The path to the old key. Should be resolved to a map
+     *                      or an array including map items.
+     * @param oldKeyName    The old key name.
+     * @param newKeyName    The new key name.
+     * @return a document content.
+     */
+    DocumentContext renameKey(JsonPath path, String oldKeyName, String newKeyName);
 }

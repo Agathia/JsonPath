@@ -16,12 +16,11 @@ package com.jayway.jsonpath;
 
 
 import com.jayway.jsonpath.internal.EvaluationContext;
-import com.jayway.jsonpath.internal.JsonReader;
+import com.jayway.jsonpath.internal.JsonContext;
 import com.jayway.jsonpath.internal.Path;
-import com.jayway.jsonpath.internal.PathCompiler;
 import com.jayway.jsonpath.internal.PathRef;
 import com.jayway.jsonpath.internal.Utils;
-import com.jayway.jsonpath.spi.http.HttpProviderFactory;
+import com.jayway.jsonpath.internal.path.PathCompiler;
 import com.jayway.jsonpath.spi.json.JsonProvider;
 
 import java.io.File;
@@ -30,6 +29,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 
+import static com.jayway.jsonpath.Option.ALWAYS_RETURN_LIST;
+import static com.jayway.jsonpath.Option.AS_PATH_LIST;
 import static com.jayway.jsonpath.internal.Utils.*;
 
 /**
@@ -168,18 +169,25 @@ public class JsonPath {
      */
     @SuppressWarnings("unchecked")
     public <T> T read(Object jsonObject, Configuration configuration) {
-        boolean optAsPathList = configuration.containsOption(Option.AS_PATH_LIST);
+        boolean optAsPathList = configuration.containsOption(AS_PATH_LIST);
         boolean optAlwaysReturnList = configuration.containsOption(Option.ALWAYS_RETURN_LIST);
         boolean optSuppressExceptions = configuration.containsOption(Option.SUPPRESS_EXCEPTIONS);
 
         try {
-            if(optAsPathList){
+            if(path.isFunctionPath()){
+                if(optAsPathList || optAlwaysReturnList){
+                    throw new JsonPathException("Options " + AS_PATH_LIST + " and " + ALWAYS_RETURN_LIST + " are not allowed when using path functions!");
+                }
+                return path.evaluate(jsonObject, jsonObject, configuration).getValue(true);
+
+            } else if(optAsPathList){
                 return  (T)path.evaluate(jsonObject, jsonObject, configuration).getPath();
+
             } else {
                 Object res = path.evaluate(jsonObject, jsonObject, configuration).getValue(false);
                 if(optAlwaysReturnList && path.isDefinite()){
                     Object array = configuration.jsonProvider().createArray();
-                    configuration.jsonProvider().setProperty(array, 0, res);
+                    configuration.jsonProvider().setArrayIndex(array, 0, res);
                     return (T)array;
                 } else {
                     return (T)res;
@@ -188,15 +196,16 @@ public class JsonPath {
         } catch (RuntimeException e){
             if(!optSuppressExceptions){
                 throw e;
-            }
-        }
-        if(optAsPathList){
-            return (T)configuration.jsonProvider().createArray();
-        } else {
-            if(optAlwaysReturnList){
-                return (T)configuration.jsonProvider().createArray();
             } else {
-                return (T)(path.isDefinite() ? null : configuration.jsonProvider().createArray());
+                if(optAsPathList){
+                    return (T)configuration.jsonProvider().createArray();
+                } else {
+                    if(optAlwaysReturnList){
+                        return (T)configuration.jsonProvider().createArray();
+                    } else {
+                        return (T)(path.isDefinite() ? null : configuration.jsonProvider().createArray());
+                    }
+                }
             }
         }
     }
@@ -215,6 +224,26 @@ public class JsonPath {
         EvaluationContext evaluationContext = path.evaluate(jsonObject, jsonObject, configuration, true);
         for (PathRef updateOperation : evaluationContext.updateOperations()) {
             updateOperation.set(newVal, configuration);
+        }
+        return resultByConfiguration(jsonObject, configuration, evaluationContext);
+    }
+
+
+    /**
+     * Replaces the value on the given path with the result of the {@link MapFunction}.
+     *
+     * @param jsonObject        a json object
+     * @param mapFunction       Converter object to be invoked
+     * @param configuration     configuration to use
+     * @return the updated jsonObject or the path list to updated objects if option AS_PATH_LIST is set.
+     */
+    public <T> T map(Object jsonObject, MapFunction mapFunction, Configuration configuration) {
+        notNull(jsonObject, "json can not be null");
+        notNull(configuration, "configuration can not be null");
+        notNull(mapFunction, "mapFunction can not be null");
+        EvaluationContext evaluationContext = path.evaluate(jsonObject, jsonObject, configuration, true);
+        for (PathRef updateOperation : evaluationContext.updateOperations()) {
+            updateOperation.convert(mapFunction, configuration);
         }
         return resultByConfiguration(jsonObject, configuration, evaluationContext);
     }
@@ -277,6 +306,17 @@ public class JsonPath {
         return resultByConfiguration(jsonObject, configuration, evaluationContext);
     }
 
+    public <T> T renameKey(Object jsonObject, String oldKeyName, String newKeyName, Configuration configuration){
+        notNull(jsonObject, "json can not be null");
+        notEmpty(newKeyName, "newKeyName can not be null or empty");
+        notNull(configuration, "configuration can not be null");
+        EvaluationContext evaluationContext = path.evaluate(jsonObject, jsonObject, configuration, true);
+        for (PathRef updateOperation : evaluationContext.updateOperations()) {
+            updateOperation.renameKey(oldKeyName, newKeyName, configuration);
+        }
+        return resultByConfiguration(jsonObject, configuration, evaluationContext);
+    }
+
     /**
      * Applies this JsonPath to the provided json string
      *
@@ -316,29 +356,6 @@ public class JsonPath {
     @SuppressWarnings({"unchecked"})
     public <T> T read(URL jsonURL) throws IOException {
         return read(jsonURL, Configuration.defaultConfiguration());
-    }
-
-    /**
-     * Applies this JsonPath to the provided json URL
-     *
-     * @param jsonURL       url to read from
-     * @param configuration configuration to use
-     * @param <T>           expected return type
-     * @return list of objects matched by the given path
-     * @throws IOException
-     */
-    @SuppressWarnings({"unchecked"})
-    public <T> T read(URL jsonURL, Configuration configuration) throws IOException {
-        notNull(jsonURL, "json URL can not be null");
-        notNull(configuration, "jsonProvider can not be null");
-
-        InputStream in = null;
-        try {
-            in = HttpProviderFactory.getProvider().get(jsonURL);
-            return read(in, "UTF-8", configuration);
-        } finally {
-            Utils.closeQuietly(in);
-        }
     }
 
     /**
@@ -482,7 +499,7 @@ public class JsonPath {
      */
     @SuppressWarnings({"unchecked"})
     public static <T> T read(String json, String jsonPath, Predicate... filters) {
-        return new JsonReader().parse(json).read(jsonPath, filters);
+        return new JsonContext().parse(json).read(jsonPath, filters);
     }
 
 
@@ -497,7 +514,7 @@ public class JsonPath {
      */
     @SuppressWarnings({"unchecked"})
     public static <T> T read(URL jsonURL, String jsonPath, Predicate... filters) throws IOException {
-        return new JsonReader().parse(jsonURL).read(jsonPath, filters);
+        return new JsonContext().parse(jsonURL).read(jsonPath, filters);
     }
 
     /**
@@ -511,7 +528,7 @@ public class JsonPath {
      */
     @SuppressWarnings({"unchecked"})
     public static <T> T read(File jsonFile, String jsonPath, Predicate... filters) throws IOException {
-        return new JsonReader().parse(jsonFile).read(jsonPath, filters);
+        return new JsonContext().parse(jsonFile).read(jsonPath, filters);
     }
 
     /**
@@ -525,7 +542,7 @@ public class JsonPath {
      */
     @SuppressWarnings({"unchecked"})
     public static <T> T read(InputStream jsonInputStream, String jsonPath, Predicate... filters) throws IOException {
-        return new JsonReader().parse(jsonInputStream).read(jsonPath, filters);
+        return new JsonContext().parse(jsonInputStream).read(jsonPath, filters);
     }
 
 
@@ -543,7 +560,7 @@ public class JsonPath {
      * @return a parsing context based on given configuration
      */
     public static ParseContext using(Configuration configuration) {
-        return new JsonReader(configuration);
+        return new JsonContext(configuration);
     }
 
     /**
@@ -552,8 +569,9 @@ public class JsonPath {
      * @param provider jsonProvider to use when parsing JSON
      * @return a parsing context based on given jsonProvider
      */
+    @Deprecated
     public static ParseContext using(JsonProvider provider) {
-        return new JsonReader(Configuration.builder().jsonProvider(provider).build());
+        return new JsonContext(Configuration.builder().jsonProvider(provider).build());
     }
 
     /**
@@ -564,7 +582,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(Object json) {
-        return new JsonReader().parse(json);
+        return new JsonContext().parse(json);
     }
 
     /**
@@ -575,7 +593,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(String json) {
-        return new JsonReader().parse(json);
+        return new JsonContext().parse(json);
     }
 
     /**
@@ -586,7 +604,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(InputStream json) {
-        return new JsonReader().parse(json);
+        return new JsonContext().parse(json);
     }
 
     /**
@@ -597,7 +615,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(File json) throws IOException {
-        return new JsonReader().parse(json);
+        return new JsonContext().parse(json);
     }
 
     /**
@@ -608,7 +626,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(URL json) throws IOException {
-        return new JsonReader().parse(json);
+        return new JsonContext().parse(json);
     }
 
     /**
@@ -619,7 +637,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(Object json, Configuration configuration) {
-        return new JsonReader(configuration).parse(json);
+        return new JsonContext(configuration).parse(json);
     }
 
     /**
@@ -630,7 +648,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(String json, Configuration configuration) {
-        return new JsonReader(configuration).parse(json);
+        return new JsonContext(configuration).parse(json);
     }
 
     /**
@@ -641,7 +659,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(InputStream json, Configuration configuration) {
-        return new JsonReader(configuration).parse(json);
+        return new JsonContext(configuration).parse(json);
     }
 
     /**
@@ -652,7 +670,7 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(File json, Configuration configuration) throws IOException {
-        return new JsonReader(configuration).parse(json);
+        return new JsonContext(configuration).parse(json);
     }
 
     /**
@@ -663,11 +681,11 @@ public class JsonPath {
      * @return a read context
      */
     public static DocumentContext parse(URL json, Configuration configuration) throws IOException {
-        return new JsonReader(configuration).parse(json);
+        return new JsonContext(configuration).parse(json);
     }
 
     private <T> T resultByConfiguration(Object jsonObject, Configuration configuration, EvaluationContext evaluationContext) {
-        if(configuration.containsOption(Option.AS_PATH_LIST)){
+        if(configuration.containsOption(AS_PATH_LIST)){
             return (T)evaluationContext.getPathList();
         } else {
             return (T) jsonObject;

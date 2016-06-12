@@ -16,45 +16,12 @@ package com.jayway.jsonpath.internal;
 
 import com.jayway.jsonpath.JsonPathException;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.ObjectStreamClass;
-import java.io.OutputStream;
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Collections;
+import java.io.StringWriter;
 import java.util.Iterator;
-import java.util.List;
 
 public final class Utils {
-
-    public static final String CR = System.getProperty("line.separator");
-
-    /**
-     * Creates a range of integers from start (inclusive) to end (exclusive)
-     *
-     * @param start
-     * @param end
-     * @return
-     */
-    public static List<Integer> createRange(int start, int end) {
-        if (end <= start) {
-            throw new IllegalArgumentException("Cannot create range from " + start + " to " + end + ", end must be greater than start.");
-        }
-        if (start == end-1) {
-            return Collections.emptyList();
-        }
-        List<Integer> range = new ArrayList<Integer>(end-start-1);
-        for (int i = start; i < end; i++) {
-            range.add(i);
-        }
-        return range;
-    }
 
     // accept a collection of objects, since all objects have toString()
     public static String join(String delimiter, String wrap, Iterable<? extends Object> objs) {
@@ -75,6 +42,42 @@ public final class Utils {
         return join(delimiter, "", objs);
     }
 
+    public static String concat(CharSequence... strings) {
+        if (strings.length == 0) {
+            return "";
+        }
+        if (strings.length == 1) {
+            return strings[0].toString();
+        }
+        int length = 0;
+        // -1 = no result, -2 = multiple results
+        int indexOfSingleNonEmptyString = -1;
+        for (int i = 0; i < strings.length; i++) {
+            CharSequence charSequence = strings[i];
+            int len = charSequence.length();
+            length += len;
+            if (indexOfSingleNonEmptyString != -2 && len > 0) {
+                if (indexOfSingleNonEmptyString == -1) {
+                    indexOfSingleNonEmptyString = i;
+                } else {
+                    indexOfSingleNonEmptyString = -2;
+                }
+            }
+        }
+        if (length == 0) {
+            return "";
+        }
+        if (indexOfSingleNonEmptyString > 0) {
+            return strings[indexOfSingleNonEmptyString].toString();
+        }
+        StringBuilder sb = new StringBuilder(length);
+        for (CharSequence charSequence : strings) {
+            sb.append(charSequence);
+        }
+        return sb.toString();
+
+    }
+
     //---------------------------------------------------------
     //
     // IO
@@ -90,35 +93,166 @@ public final class Utils {
         }
     }
 
-    //---------------------------------------------------------
-    //
-    // Strings
-    //
-    //---------------------------------------------------------
-    public static boolean isInt(String str) {
+    public static String escape(String str, boolean escapeSingleQuote) {
         if (str == null) {
-            return false;
+            return null;
         }
-        int sz = str.length();
-        for (int i = 0; i < sz; i++) {
-            if (Character.isDigit(str.charAt(i)) == false) {
-                return false;
+        int len = str.length();
+        StringWriter writer = new StringWriter(len * 2);
+
+        for (int i = 0; i < len; i++) {
+            char ch = str.charAt(i);
+
+            // handle unicode
+            if (ch > 0xfff) {
+                writer.write("\\u" + hex(ch));
+            } else if (ch > 0xff) {
+                writer.write("\\u0" + hex(ch));
+            } else if (ch > 0x7f) {
+                writer.write("\\u00" + hex(ch));
+            } else if (ch < 32) {
+                switch (ch) {
+                    case '\b':
+                        writer.write('\\');
+                        writer.write('b');
+                        break;
+                    case '\n':
+                        writer.write('\\');
+                        writer.write('n');
+                        break;
+                    case '\t':
+                        writer.write('\\');
+                        writer.write('t');
+                        break;
+                    case '\f':
+                        writer.write('\\');
+                        writer.write('f');
+                        break;
+                    case '\r':
+                        writer.write('\\');
+                        writer.write('r');
+                        break;
+                    default :
+                        if (ch > 0xf) {
+                            writer.write("\\u00" + hex(ch));
+                        } else {
+                            writer.write("\\u000" + hex(ch));
+                        }
+                        break;
+                }
+            } else {
+                switch (ch) {
+                    case '\'':
+                        if (escapeSingleQuote) {
+                            writer.write('\\');
+                        }
+                        writer.write('\'');
+                        break;
+                    case '"':
+                        writer.write('\\');
+                        writer.write('"');
+                        break;
+                    case '\\':
+                        writer.write('\\');
+                        writer.write('\\');
+                        break;
+                    case '/':
+                        writer.write('\\');
+                        writer.write('/');
+                        break;
+                    default :
+                        writer.write(ch);
+                        break;
+                }
             }
         }
-        return true;
+        return writer.toString();
     }
 
-    public static boolean isNumeric(String str) {
+    public static String unescape(String str) {
         if (str == null) {
-            return false;
+            return null;
         }
-        int sz = str.length();
-        for (int i = 0; i < sz; i++) {
-            if (Character.isDigit(str.charAt(i)) == false && !(str.charAt(i) == '.')) {
-                return false;
+        int len = str.length();
+        StringWriter writer = new StringWriter(len);
+        StringBuffer unicode = new StringBuffer(4);
+        boolean hadSlash = false;
+        boolean inUnicode = false;
+        for (int i = 0; i < len; i++) {
+            char ch = str.charAt(i);
+            if (inUnicode) {
+                unicode.append(ch);
+                if (unicode.length() == 4) {
+                    try {
+                        int value = Integer.parseInt(unicode.toString(), 16);
+                        writer.write((char) value);
+                        unicode.setLength(0);
+                        inUnicode = false;
+                        hadSlash = false;
+                    } catch (NumberFormatException nfe) {
+                        throw new JsonPathException("Unable to parse unicode value: " + unicode, nfe);
+                    }
+                }
+                continue;
             }
+            if (hadSlash) {
+                hadSlash = false;
+                switch (ch) {
+                    case '\\':
+                        writer.write('\\');
+                        break;
+                    case '\'':
+                        writer.write('\'');
+                        break;
+                    case '\"':
+                        writer.write('"');
+                        break;
+                    case 'r':
+                        writer.write('\r');
+                        break;
+                    case 'f':
+                        writer.write('\f');
+                        break;
+                    case 't':
+                        writer.write('\t');
+                        break;
+                    case 'n':
+                        writer.write('\n');
+                        break;
+                    case 'b':
+                        writer.write('\b');
+                        break;
+                    case 'u':
+                    {
+                        inUnicode = true;
+                        break;
+                    }
+                    default :
+                        writer.write(ch);
+                        break;
+                }
+                continue;
+            } else if (ch == '\\') {
+                hadSlash = true;
+                continue;
+            }
+            writer.write(ch);
         }
-        return true;
+        if (hadSlash) {
+            writer.write('\\');
+        }
+        return writer.toString();
+    }
+
+    /**
+     * Returns an upper case hexadecimal <code>String</code> for the given
+     * character.
+     *
+     * @param ch The character to map.
+     * @return An upper case hexadecimal <code>String</code>
+     */
+    public static String hex(char ch) {
+        return Integer.toHexString(ch).toUpperCase();
     }
 
     /**
@@ -156,38 +290,7 @@ public final class Utils {
         return cs.toString().indexOf(searchChar.toString(), start);
     }
 
-    /**
-     * <p>Counts how many times the substring appears in the larger string.</p>
-     * <p/>
-     * <p>A {@code null} or empty ("") String input returns {@code 0}.</p>
-     * <p/>
-     * <pre>
-     * StringUtils.countMatches(null, *)       = 0
-     * StringUtils.countMatches("", *)         = 0
-     * StringUtils.countMatches("abba", null)  = 0
-     * StringUtils.countMatches("abba", "")    = 0
-     * StringUtils.countMatches("abba", "a")   = 2
-     * StringUtils.countMatches("abba", "ab")  = 1
-     * StringUtils.countMatches("abba", "xxx") = 0
-     * </pre>
-     *
-     * @param str the CharSequence to check, may be null
-     * @param sub the substring to count, may be null
-     * @return the number of occurrences, 0 if either CharSequence is {@code null}
-     * @since 3.0 Changed signature from countMatches(String, String) to countMatches(CharSequence, CharSequence)
-     */
-    public static int countMatches(CharSequence str, CharSequence sub) {
-        if (isEmpty(str) || isEmpty(sub)) {
-            return 0;
-        }
-        int count = 0;
-        int idx = 0;
-        while ((idx = indexOf(str, sub, idx)) != -1) {
-            count++;
-            idx += sub.length();
-        }
-        return count;
-    }
+
 
     //---------------------------------------------------------
     //
@@ -237,6 +340,30 @@ public final class Utils {
     }
 
     /**
+     * Check if one and only one condition is true; otherwise
+     * throw an exception with the specified message.
+     *
+     * @param message     error describing message
+     * @param expressions the boolean expressions to check
+     * @throws IllegalArgumentException if zero or more than one expressions are true
+     */
+    public static void onlyOneIsTrue(final String message, final boolean... expressions) {
+        if (!onlyOneIsTrueNonThrow(expressions)) {
+            throw new IllegalArgumentException(message);
+        }
+    }
+
+    public static boolean onlyOneIsTrueNonThrow(final boolean... expressions) {
+        int count = 0;
+        for (final boolean expression : expressions) {
+            if (expression && ++count > 1) {
+                return false;
+            }
+        }
+        return 1 == count;
+    }
+
+    /**
      * <p>Validate that the specified argument character sequence is
      * neither {@code null} nor a length of zero (no characters);
      * otherwise throwing an exception with the specified message.
@@ -271,177 +398,9 @@ public final class Utils {
         if (null == o) {
             return null;
         }
-
         return o.toString();
     }
 
-    //---------------------------------------------------------
-    //
-    // Serialization
-    //
-    //---------------------------------------------------------
-
-
-    /**
-     * <p>Serializes an {@code Object} to the specified stream.</p>
-     * <p/>
-     * <p>The stream will be closed once the object is written.
-     * This avoids the need for a finally clause, and maybe also exception
-     * handling, in the application code.</p>
-     * <p/>
-     * <p>The stream passed in is not buffered internally within this method.
-     * This is the responsibility of your application if desired.</p>
-     *
-     * @param obj          the object to serialize to bytes, may be null
-     * @param outputStream the stream to write to, must not be null
-     * @throws IllegalArgumentException if {@code outputStream} is {@code null}
-     * @throws RuntimeException         (runtime) if the serialization fails
-     */
-    public static void serialize(Serializable obj, OutputStream outputStream) {
-        if (outputStream == null) {
-            throw new IllegalArgumentException("The OutputStream must not be null");
-        }
-        ObjectOutputStream out = null;
-        try {
-            // stream closed in the finally
-            out = new ObjectOutputStream(outputStream);
-            out.writeObject(obj);
-
-        } catch (IOException ex) {
-            throw new JsonPathException(ex);
-        } finally {
-            try {
-                if (out != null) {
-                    out.close();
-                }
-            } catch (IOException ex) { // NOPMD
-                // ignore close exception
-            }
-        }
+    private Utils() {
     }
-
-    /**
-     * <p>Serializes an {@code Object} to a byte array for
-     * storage/serialization.</p>
-     *
-     * @param obj the object to serialize to bytes
-     * @return a byte[] with the converted Serializable
-     * @throws RuntimeException (runtime) if the serialization fails
-     */
-    public static byte[] serialize(Serializable obj) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream(512);
-        serialize(obj, baos);
-        return baos.toByteArray();
-    }
-
-    // Deserialize
-    //-----------------------------------------------------------------------
-
-    /**
-     * <p>Deserializes an {@code Object} from the specified stream.</p>
-     * <p/>
-     * <p>The stream will be closed once the object is written. This
-     * avoids the need for a finally clause, and maybe also exception
-     * handling, in the application code.</p>
-     * <p/>
-     * <p>The stream passed in is not buffered internally within this method.
-     * This is the responsibility of your application if desired.</p>
-     *
-     * @param inputStream the serialized object input stream, must not be null
-     * @return the deserialized object
-     * @throws IllegalArgumentException if {@code inputStream} is {@code null}
-     * @throws RuntimeException         (runtime) if the serialization fails
-     */
-    public static Object deserialize(InputStream inputStream) {
-        if (inputStream == null) {
-            throw new IllegalArgumentException("The InputStream must not be null");
-        }
-        ObjectInputStream in = null;
-        try {
-            // stream closed in the finally
-            in = new ObjectInputStream(inputStream);
-            return in.readObject();
-
-        } catch (ClassNotFoundException ex) {
-            throw new JsonPathException(ex);
-        } catch (IOException ex) {
-            throw new JsonPathException(ex);
-        } finally {
-            try {
-                if (in != null) {
-                    in.close();
-                }
-            } catch (IOException ex) { // NOPMD
-                // ignore close exception
-            }
-        }
-    }
-
-    /**
-     * <p>Deserializes a single {@code Object} from an array of bytes.</p>
-     *
-     * @param objectData the serialized object, must not be null
-     * @return the deserialized object
-     * @throws IllegalArgumentException if {@code objectData} is {@code null}
-     * @throws RuntimeException         (runtime) if the serialization fails
-     */
-    public static Object deserialize(byte[] objectData) {
-        if (objectData == null) {
-            throw new IllegalArgumentException("The byte[] must not be null");
-        }
-        ByteArrayInputStream bais = new ByteArrayInputStream(objectData);
-        return deserialize(bais);
-    }
-
-    /**
-     * <p>Custom specialization of the standard JDK {@link java.io.ObjectInputStream}
-     * that uses a custom  <code>ClassLoader</code> to resolve a class.
-     * If the specified <code>ClassLoader</code> is not able to resolve the class,
-     * the context classloader of the current thread will be used.
-     * This way, the standard deserialization work also in web-application
-     * containers and application servers, no matter in which of the
-     * <code>ClassLoader</code> the particular class that encapsulates
-     * serialization/deserialization lives. </p>
-     * <p/>
-     * <p>For more in-depth information about the problem for which this
-     * class here is a workaround, see the JIRA issue LANG-626. </p>
-     */
-    static class ClassLoaderAwareObjectInputStream extends ObjectInputStream {
-        private ClassLoader classLoader;
-
-        /**
-         * Constructor.
-         *
-         * @param in          The <code>InputStream</code>.
-         * @param classLoader classloader to use
-         * @throws IOException if an I/O error occurs while reading stream header.
-         * @see java.io.ObjectInputStream
-         */
-        public ClassLoaderAwareObjectInputStream(InputStream in, ClassLoader classLoader) throws IOException {
-            super(in);
-            this.classLoader = classLoader;
-        }
-
-        /**
-         * Overriden version that uses the parametrized <code>ClassLoader</code> or the <code>ClassLoader</code>
-         * of the current <code>Thread</code> to resolve the class.
-         *
-         * @param desc An instance of class <code>ObjectStreamClass</code>.
-         * @return A <code>Class</code> object corresponding to <code>desc</code>.
-         * @throws IOException            Any of the usual Input/Output exceptions.
-         * @throws ClassNotFoundException If class of a serialized object cannot be found.
-         */
-        @Override
-        protected Class<?> resolveClass(ObjectStreamClass desc) throws IOException, ClassNotFoundException {
-            String name = desc.getName();
-            try {
-                return Class.forName(name, false, classLoader);
-            } catch (ClassNotFoundException ex) {
-                return Class.forName(name, false, Thread.currentThread().getContextClassLoader());
-            }
-        }
-
-    }
-
-    private Utils () {}
 }

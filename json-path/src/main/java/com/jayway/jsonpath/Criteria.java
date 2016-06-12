@@ -15,19 +15,18 @@
 package com.jayway.jsonpath;
 
 import com.jayway.jsonpath.internal.Path;
-import com.jayway.jsonpath.internal.PathCompiler;
-import com.jayway.jsonpath.internal.token.PredicateContextImpl;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.jayway.jsonpath.internal.Utils;
+import com.jayway.jsonpath.internal.filter.RelationalExpressionNode;
+import com.jayway.jsonpath.internal.filter.RelationalOperator;
+import com.jayway.jsonpath.internal.filter.ValueNode;
 
-import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.regex.Pattern;
 
-import static com.jayway.jsonpath.internal.Utils.join;
 import static com.jayway.jsonpath.internal.Utils.notNull;
 
 
@@ -37,353 +36,43 @@ import static com.jayway.jsonpath.internal.Utils.notNull;
 @SuppressWarnings("unchecked")
 public class Criteria implements Predicate {
 
-    private static final Logger logger = LoggerFactory.getLogger(Criteria.class);
-
-    private static final String[] OPERATORS = {
-            CriteriaType.EQ.toString(),
-            CriteriaType.GTE.toString(),
-            CriteriaType.LTE.toString(),
-            CriteriaType.NE.toString(),
-            CriteriaType.LT.toString(),
-            CriteriaType.GT.toString(),
-            CriteriaType.REGEX.toString()
-    };
-
-    private Object left;
-    private CriteriaType criteriaType;
-    private Object right;
-
     private final List<Criteria> criteriaChain;
+    private ValueNode left;
+    private RelationalOperator criteriaType;
+    private ValueNode right;
 
-    private static enum CriteriaType {
-        EQ {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                boolean res = (0 == safeCompare(left, right));
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), left, res);
-                return res;
-            }
-
-            @Override
-            public String toString() {
-                return "==";
-            }
-        },
-        NE {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                boolean res = (0 != safeCompare(left, right));
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), left, res);
-                return res;
-            }
-
-            @Override
-            public String toString() {
-                return "!=";
-            }
-        },
-        GT {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                if ((left == null) ^ (right == null)) {
-                    return false;
-                }
-                boolean res = (0 > safeCompare(left, right));
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), left, res);
-                return res;
-            }
-            @Override
-            public String toString() {
-                return ">";
-            }
-        },
-        GTE {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                if ((left == null) ^ (right == null)) {
-                    return false;
-                }
-                boolean res = (0 >= safeCompare(left, right));
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), left, res);
-                return res;
-            }
-            @Override
-            public String toString() {
-                return ">=";
-            }
-        },
-        LT {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                if ((left == null) ^ (right == null)) {
-                    return false;
-                }
-                boolean res = (0 < safeCompare(left, right));
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), left, res);
-                return res;
-            }
-            @Override
-            public String toString() {
-                return "<";
-            }
-        },
-        LTE {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                if ((left == null) ^ (right == null)) {
-                    return false;
-                }
-                boolean res = (0 <= safeCompare(left, right));
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), left, res);
-                return res;
-            }
-            @Override
-            public String toString() {
-                return "<=";
-            }
-        },
-        IN {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                boolean res = false;
-                Collection exps = (Collection) left;
-                for (Object exp : exps) {
-                    if (0 == safeCompare(exp, right)) {
-                        res = true;
-                        break;
-                    }
-                }
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), join(", ", exps), res);
-                return res;
-            }
-        },
-        NIN {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                Collection nexps = (Collection) left;
-                boolean res = !nexps.contains(right);
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right, name(), join(", ", nexps), res);
-                return res;
-            }
-        },
-        ALL {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                boolean res = true;
-                Collection exps = (Collection) left;
-                if (ctx.configuration().jsonProvider().isArray(right)) {
-                    for (Object exp : exps) {
-                        boolean found = false;
-                        for (Object check : ctx.configuration().jsonProvider().toIterable(right)) {
-                            if (0 == safeCompare(exp, check)) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            res = false;
-                            break;
-                        }
-                    }
-                    if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", join(", ", ctx.configuration().jsonProvider().toIterable(right)), name(), join(", ", exps), res);
-                } else {
-                    res = false;
-                    if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", "<NOT AN ARRAY>", name(), join(", ", exps), res);
-                }
-                return res;
-            }
-        },
-        SIZE {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                int size = (Integer) left;
-                boolean res;
-                if (ctx.configuration().jsonProvider().isArray(right)) {
-                    int length = ctx.configuration().jsonProvider().length(right);
-                    res = (length == size);
-                    if(logger.isDebugEnabled()) logger.debug("Array with size {} {} {} => {}", length, name(), size, res);
-                } else if (right instanceof String) {
-                    int length = ((String) right).length();
-                    res = length == size;
-                    if(logger.isDebugEnabled()) logger.debug("String with length {} {} {} => {}", length, name(), size, res);
-                } else {
-                    res = false;
-                    if(logger.isDebugEnabled()) logger.debug("{} {} {} => {}", right == null ? "null" : right.getClass().getName(), name(), size, res);
-                }
-                return res;
-            }
-        },
-        EXISTS {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                //This must be handled outside
-                throw new UnsupportedOperationException();
-            }
-        },
-        TYPE {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                final Class<?> expType = (Class<?>) left;
-                final Class<?> actType = right == null ? null : right.getClass();
-
-                return actType != null && expType.isAssignableFrom(actType);
-            }
-        },
-        REGEX {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                boolean res = false;
-                Pattern pattern;
-                Object  target;
-
-                if(right instanceof Pattern){
-                    pattern = (Pattern) right;
-                    target  = left;
-                } else {
-                    pattern = (Pattern) left;
-                    target = right;
-                }
-
-                if(target != null){
-                    res = pattern.matcher(target.toString()).matches();
-                }
-                if(logger.isDebugEnabled()) logger.debug("[{}] {} [{}] => {}", right == null?"null":right.toString(), name(), left==null?"null":left.toString(), res);
-                return res;
-            }
-            @Override
-            public String toString() {
-                return "=~";
-            }
-        },
-        MATCHES {
-            @Override
-            boolean eval(Object left, final Object right, final PredicateContext ctx) {
-                PredicateContextImpl pci = (PredicateContextImpl) ctx;
-                Predicate exp = (Predicate) left;
-                return exp.apply(new PredicateContextImpl(right, ctx.root(), ctx.configuration(), pci.documentPathCache()));
-            }
-        },
-        NOT_EMPTY {
-            @Override
-            boolean eval(Object left, Object right, PredicateContext ctx) {
-                boolean res = false;
-                if (right != null) {
-                    if (ctx.configuration().jsonProvider().isArray(right)) {
-                        int len = ctx.configuration().jsonProvider().length(right);
-                        res = (0 != len);
-                        if(logger.isDebugEnabled())  logger.debug("array length = {} {} => {}", len, name(), res);
-                    } else if (right instanceof String) {
-                        int len = ((String) right).length();
-                        res = (0 != len);
-                        if(logger.isDebugEnabled()) logger.debug("string length = {} {} => {}", len, name(), res);
-                    }
-                }
-                return res;
-            }
-        };
-
-        abstract boolean eval(Object left, Object right, PredicateContext ctx);
-
-        public static CriteriaType parse(String str) {
-            if ("==".equals(str)) {
-                return EQ;
-            } else if (">".equals(str)) {
-                return GT;
-            } else if (">=".equals(str)) {
-                return GTE;
-            } else if ("<".equals(str)) {
-                return LT;
-            } else if ("<=".equals(str)) {
-                return LTE;
-            } else if ("!=".equals(str)) {
-                return NE;
-            } else if ("=~".equals(str)) {
-                return REGEX;
-            } else {
-                throw new UnsupportedOperationException("CriteriaType " + str + " can not be parsed");
-            }
-        }
-    }
-
-    private Criteria(List<Criteria> criteriaChain, Object left) {
-
-        if(left instanceof Path) {
-            if (!((Path)left).isDefinite()) {
-                throw new InvalidCriteriaException("A criteria path must be definite. The path " + left.toString() + " is not!");
-            }
-        }
+    private Criteria(List<Criteria> criteriaChain, ValueNode left) {
         this.left = left;
         this.criteriaChain = criteriaChain;
         this.criteriaChain.add(this);
     }
 
-    private Criteria(Object left) {
+    private Criteria(ValueNode left) {
         this(new LinkedList<Criteria>(), left);
     }
-
-    private Criteria(Object left, CriteriaType criteriaType, Object right) {
-        this(new LinkedList<Criteria>(), left);
-        this.criteriaType = criteriaType;
-        this.right = right;
-    }
-
 
     @Override
     public boolean apply(PredicateContext ctx) {
-        for (Criteria criteria : criteriaChain) {
-            if (!criteria.eval(ctx)) {
+        for (RelationalExpressionNode expressionNode : toRelationalExpressionNodes()) {
+            if(!expressionNode.apply(ctx)){
                 return false;
             }
         }
         return true;
     }
 
-    private Object evaluateIfPath(Object target, PredicateContext ctx){
-        Object res = target;
-        if(res instanceof Path){
-            Path leftPath = (Path) target;
-
-            if(ctx instanceof PredicateContextImpl){
-                //This will use cache for document ($) queries
-                PredicateContextImpl ctxi = (PredicateContextImpl) ctx;
-                res = ctxi.evaluate(leftPath);
-            } else {
-                Object doc = leftPath.isRootPath()?ctx.root():ctx.item();
-                res = leftPath.evaluate(doc, ctx.root(), ctx.configuration()).getValue();
-            }
-        }
-        return res == null ? null : ctx.configuration().jsonProvider().unwrap(res);
+    @Override
+    public String toString() {
+        return Utils.join(" && ", toRelationalExpressionNodes());
     }
 
-    private boolean eval(PredicateContext ctx) {
-        if (CriteriaType.EXISTS == criteriaType) {
-            boolean exists = ((Boolean) right);
-            try {
-                Configuration c = Configuration.builder().jsonProvider(ctx.configuration().jsonProvider()).options(Option.REQUIRE_PROPERTIES).build();
-                Object value = ((Path) left).evaluate(ctx.item(), ctx.root(), c).getValue();
-                if(exists){
-                    return  (value != null);
-                } else {
-                    return (value == null);
-                }
-
-            } catch (PathNotFoundException e) {
-                return !exists;
-            }
-        } else {
-            try {
-                Object leftVal = evaluateIfPath(left, ctx);
-                Object rightVal = evaluateIfPath(right, ctx);
-
-                return criteriaType.eval(rightVal, leftVal, ctx);
-            } catch (ValueCompareException e) {
-                return false;
-            } catch (PathNotFoundException e) {
-                return false;
-            }
+    private Collection<RelationalExpressionNode> toRelationalExpressionNodes(){
+        List<RelationalExpressionNode> nodes = new ArrayList<RelationalExpressionNode>(criteriaChain.size());
+        for (Criteria criteria : criteriaChain) {
+            nodes.add(new RelationalExpressionNode(criteria.left, criteria.criteriaType, criteria.right));
         }
+        return nodes;
     }
-
 
     /**
      * Static factory method to create a Criteria using the provided key
@@ -391,9 +80,12 @@ public class Criteria implements Predicate {
      * @param key filed name
      * @return the new criteria
      */
+    @Deprecated
+    //This should be private.It exposes internal classes
     public static Criteria where(Path key) {
-        return new Criteria(key);
+        return new Criteria(ValueNode.createPathNode(key));
     }
+
 
     /**
      * Static factory method to create a Criteria using the provided key
@@ -403,10 +95,7 @@ public class Criteria implements Predicate {
      */
 
     public static Criteria where(String key) {
-        if(!key.startsWith("$") && !key.startsWith("@")){
-            key = "@." + key;
-        }
-        return where(PathCompiler.compile(key));
+        return new Criteria(ValueNode.toValueNode(prefixPath(key)));
     }
 
     /**
@@ -416,10 +105,8 @@ public class Criteria implements Predicate {
      * @return the criteria builder
      */
     public Criteria and(String key) {
-        if(!key.startsWith("$") && !key.startsWith("@")){
-            key = "@." + key;
-        }
-        return new Criteria(this.criteriaChain, PathCompiler.compile(key));
+        checkComplete();
+        return new Criteria(this.criteriaChain, ValueNode.toValueNode(prefixPath(key)));
     }
 
     /**
@@ -429,8 +116,8 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria is(Object o) {
-        this.criteriaType = CriteriaType.EQ;
-        this.right = o;
+        this.criteriaType = RelationalOperator.EQ;
+        this.right = ValueNode.toValueNode(o);
         return this;
     }
 
@@ -451,8 +138,8 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria ne(Object o) {
-        this.criteriaType = CriteriaType.NE;
-        this.right = o;
+        this.criteriaType = RelationalOperator.NE;
+        this.right = ValueNode.toValueNode(o);
         return this;
     }
 
@@ -463,8 +150,8 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria lt(Object o) {
-        this.criteriaType = CriteriaType.LT;
-        this.right = o;
+        this.criteriaType = RelationalOperator.LT;
+        this.right = ValueNode.toValueNode(o);
         return this;
     }
 
@@ -475,8 +162,8 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria lte(Object o) {
-        this.criteriaType = CriteriaType.LTE;
-        this.right = o;
+        this.criteriaType = RelationalOperator.LTE;
+        this.right = ValueNode.toValueNode(o);
         return this;
     }
 
@@ -487,8 +174,8 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria gt(Object o) {
-        this.criteriaType = CriteriaType.GT;
-        this.right = o;
+        this.criteriaType = RelationalOperator.GT;
+        this.right = ValueNode.toValueNode(o);
         return this;
     }
 
@@ -499,8 +186,8 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria gte(Object o) {
-        this.criteriaType = CriteriaType.GTE;
-        this.right = o;
+        this.criteriaType = RelationalOperator.GTE;
+        this.right = ValueNode.toValueNode(o);
         return this;
     }
 
@@ -512,8 +199,8 @@ public class Criteria implements Predicate {
      */
     public Criteria regex(Pattern pattern) {
         notNull(pattern, "pattern can not be null");
-        this.criteriaType = CriteriaType.REGEX;
-        this.right = pattern;
+        this.criteriaType = RelationalOperator.REGEX;
+        this.right = ValueNode.toValueNode(pattern);
         return this;
     }
 
@@ -537,8 +224,21 @@ public class Criteria implements Predicate {
      */
     public Criteria in(Collection<?> c) {
         notNull(c, "collection can not be null");
-        this.criteriaType = CriteriaType.IN;
-        this.right = c;
+        this.criteriaType = RelationalOperator.IN;
+        this.right = new ValueNode.ValueListNode(c);
+        return this;
+    }
+
+    /**
+     * The <code>contains</code> operator asserts that the provided object is contained
+     * in the result. The object that should contain the input can be either an object or a String.
+     *
+     * @param o that should exists in given collection or
+     * @return the criteria
+     */
+    public Criteria contains(Object o) {
+        this.criteriaType = RelationalOperator.CONTAINS;
+        this.right = ValueNode.toValueNode(o);
         return this;
     }
 
@@ -562,8 +262,8 @@ public class Criteria implements Predicate {
      */
     public Criteria nin(Collection<?> c) {
         notNull(c, "collection can not be null");
-        this.criteriaType = CriteriaType.NIN;
-        this.right = c;
+        this.criteriaType = RelationalOperator.NIN;
+        this.right = new ValueNode.ValueListNode(c);
         return this;
     }
 
@@ -587,8 +287,8 @@ public class Criteria implements Predicate {
      */
     public Criteria all(Collection<?> c) {
         notNull(c, "collection can not be null");
-        this.criteriaType = CriteriaType.ALL;
-        this.right = c;
+        this.criteriaType = RelationalOperator.ALL;
+        this.right = new ValueNode.ValueListNode(c);
         return this;
     }
 
@@ -604,34 +304,43 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria size(int size) {
-        this.criteriaType = CriteriaType.SIZE;
-        this.right = size;
+        this.criteriaType = RelationalOperator.SIZE;
+        this.right = ValueNode.toValueNode(size);
         return this;
     }
 
+    /**
+     * The $type operator matches values based on their Java JSON type.
+     *
+     * Supported types are:
+     *
+     *  List.class
+     *  Map.class
+     *  String.class
+     *  Number.class
+     *  Boolean.class
+     *
+     * Other types evaluates to false
+     *
+     * @param clazz
+     * @return the criteria
+     */
+    public Criteria type(Class<?> clazz) {
+        this.criteriaType = RelationalOperator.TYPE;
+        this.right = ValueNode.createClassNode(clazz);
+        return this;
+    }
 
     /**
      * Check for existence (or lack thereof) of a field.
      *
-     * @param b
+     * @param shouldExist
      * @return the criteria
      */
-    public Criteria exists(boolean b) {
-        this.criteriaType = CriteriaType.EXISTS;
-        this.right = b;
-        return this;
-    }
-
-    /**
-     * The $type operator matches values based on their Java type.
-     *
-     * @param t
-     * @return the criteria
-     */
-    public Criteria type(Class<?> t) {
-        notNull(t, "type can not be null");
-        this.criteriaType = CriteriaType.TYPE;
-        this.right = t;
+    public Criteria exists(boolean shouldExist) {
+        this.criteriaType = RelationalOperator.EXISTS;
+        this.right = ValueNode.toValueNode(shouldExist);
+        this.left = left.asPathNode().asExistsCheck(shouldExist);
         return this;
     }
 
@@ -640,9 +349,20 @@ public class Criteria implements Predicate {
      *
      * @return the criteria
      */
+    @Deprecated
     public Criteria notEmpty() {
-        this.criteriaType = CriteriaType.NOT_EMPTY;
-        this.right = null;
+        return empty(false);
+    }
+
+    /**
+     * The <code>notEmpty</code> operator checks that an array or String is empty.
+     *
+     * @param empty should be empty
+     * @return the criteria
+     */
+    public Criteria empty(boolean empty) {
+        this.criteriaType = RelationalOperator.EMPTY;
+        this.right = empty ? ValueNode.TRUE : ValueNode.FALSE;
         return this;
     }
 
@@ -653,62 +373,32 @@ public class Criteria implements Predicate {
      * @return the criteria
      */
     public Criteria matches(Predicate p) {
-        this.criteriaType = CriteriaType.MATCHES;
-        this.right = p;
+        this.criteriaType = RelationalOperator.MATCHES;
+        this.right = new ValueNode.PredicateNode(p);
         return this;
     }
 
-    private static boolean isPath(String string){
-       return (string != null
-               && (string.startsWith("$") || string.startsWith("@") || string.startsWith("!@")));
-    }
-
-    private static boolean isString(String string){
-        return (string != null && !string.isEmpty() && string.charAt(0) == '\'' && string.charAt(string.length() - 1) == '\'');
-    }
-    private static boolean isPattern(String string){
-        return (string != null
-                && !string.isEmpty()
-                && string.charAt(0) == '/'
-                && (string.charAt(string.length() - 1) == '/' || (string.charAt(string.length() - 2) == '/' && string.charAt(string.length() - 1) == 'i'))
-        );
-    }
-
-    private static Pattern compilePattern(String string) {
-        int lastIndex = string.lastIndexOf('/');
-        boolean ignoreCase = string.endsWith("i");
-        String regex = string.substring(1, lastIndex);
-
-        int flags = ignoreCase ? Pattern.CASE_INSENSITIVE : 0;
-        return Pattern.compile(regex, flags);
-    }
-
-
-
     /**
      * Parse the provided criteria
+     *
+     * Deprecated use {@link Filter#parse(String)}
+     *
      * @param criteria
      * @return a criteria
      */
-    public static Criteria parse(String criteria){
-        int operatorIndex = -1;
-        String left = "";
-        String operator = "";
-        String right = "";
-        for (int y = 0; y < OPERATORS.length; y++) {
-            operatorIndex = criteria.indexOf(OPERATORS[y]);
-            if (operatorIndex != -1) {
-                operator = OPERATORS[y];
-                break;
-            }
+    @Deprecated
+    public static Criteria parse(String criteria) {
+        if(criteria == null){
+            throw new InvalidPathException("Criteria can not be null");
         }
-        if (!operator.isEmpty()) {
-            left = criteria.substring(0, operatorIndex).trim();
-            right = criteria.substring(operatorIndex + operator.length()).trim();
+        String[] split = criteria.trim().split(" ");
+        if(split.length == 3){
+            return create(split[0], split[1], split[2]);
+        } else if(split.length == 1){
+            return create(split[0], "EXISTS", "true");
         } else {
-            left = criteria.trim();
+            throw new InvalidPathException("Could not parse criteria");
         }
-        return Criteria.create(left, operator, right);
     }
 
     /**
@@ -718,116 +408,27 @@ public class Criteria implements Predicate {
      * @param right expected value
      * @return a new Criteria
      */
+    @Deprecated
     public static Criteria create(String left, String operator, String right) {
-        Object leftPrepared = left;
-        Object rightPrepared = right;
-        Path leftPath = null;
-        Path rightPath = null;
-        boolean existsCheck = true;
-
-        if(isPath(left)){
-            if(left.charAt(0) == '!'){
-                existsCheck = false;
-                left = left.substring(1);
-            }
-            leftPath = PathCompiler.compile(left);
-            if(!leftPath.isDefinite()){
-                throw new InvalidPathException("the predicate path: " + left + " is not definite");
-            }
-            leftPrepared = leftPath;
-        } else if(isString(left)) {
-            leftPrepared = left.substring(1, left.length() - 1);
-        } else if(isPattern(left)){
-            leftPrepared = compilePattern(left);
-        }
-
-        if(isPath(right)){
-            if(right.charAt(0) == '!'){
-                throw new InvalidPathException("Invalid negation! Can only be used for existence check e.g [?(!@.foo)]");
-            }
-            rightPath = PathCompiler.compile(right);
-            if(!rightPath.isDefinite()){
-                throw new InvalidPathException("the predicate path: " + right + " is not definite");
-            }
-            rightPrepared = rightPath;
-        } else if(isString(right)) {
-            rightPrepared = right.substring(1, right.length() - 1);
-        } else if(isPattern(right)){
-            rightPrepared = compilePattern(right);
-        }
-
-        if(leftPath != null && operator.isEmpty()){
-            return Criteria.where(leftPath).exists(existsCheck);
-        } else {
-            return new Criteria(leftPrepared, CriteriaType.parse(operator), rightPrepared);
-        }
-    }
-
-    private static int safeCompare(Object left, Object right) throws ValueCompareException {
-
-        if(left == right){
-            return 0;
-        }
-
-        boolean leftNullish = isNullish(left);
-        boolean rightNullish = isNullish(right);
-
-        if (leftNullish && !rightNullish) {
-            return -1;
-        } else if (!leftNullish && rightNullish) {
-            return 1;
-        } else if (leftNullish && rightNullish) {
-            return 0;
-        } else if (left instanceof String && right instanceof String) {
-            return ((String) left).compareTo((String) right);
-        } else if (left instanceof Number && right instanceof Number) {
-            return new BigDecimal(left.toString()).compareTo(new BigDecimal(right.toString()));
-        } else if (left instanceof String && right instanceof Number) {
-            return new BigDecimal(left.toString()).compareTo(new BigDecimal(right.toString()));
-        } else if (left instanceof String && right instanceof Boolean) {
-            Boolean e = Boolean.valueOf((String) left);
-            Boolean a = (Boolean) right;
-            return e.compareTo(a);
-        } else if (left instanceof Boolean && right instanceof Boolean) {
-            Boolean e = (Boolean) left;
-            Boolean a = (Boolean) right;
-            return e.compareTo(a);
-        } else {
-            logger.debug("Can not compare a {} with a {}", left.getClass().getName(), right.getClass().getName());
-            throw new ValueCompareException();
-        }
-    }
-
-    private static boolean isNullish(Object o) {
-        return (o == null || ((o instanceof String) && ("null".equals(o))));
+        Criteria criteria = new Criteria(ValueNode.toValueNode(left));
+        criteria.criteriaType = RelationalOperator.fromString(operator);
+        criteria.right = ValueNode.toValueNode(right);
+        return criteria;
     }
 
 
-
-    @Override
-    public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(left.toString())
-                //.append("|")
-                .append(criteriaType.toString())
-                //.append("|")
-                .append(wrapString(right));
-                //.append("|");
-        return sb.toString();
+    private static String prefixPath(String key){
+        if (!key.startsWith("$") && !key.startsWith("@")) {
+            key = "@." + key;
+        }
+        return key;
     }
 
-    private static String wrapString(Object o){
-        if(o == null){
-            return "null";
-        }
-        if(o instanceof String){
-            return "'" + o.toString() + "'";
-        } else {
-            return o.toString();
+    private void checkComplete(){
+        boolean complete = (left != null && criteriaType != null && right != null);
+        if(!complete){
+            throw new JsonPathException("Criteria build exception. Complete on criteria before defining next.");
         }
     }
-
-
-
 
 }
